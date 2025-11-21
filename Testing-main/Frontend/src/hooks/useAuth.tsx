@@ -15,7 +15,7 @@ export interface User {
 
 interface AuthContextType {
   user: User | null;
-  login: (email: string, password: string) => Promise<{ user: User } | { error: string }>;
+  login: (emailOrStudentId: string, password: string, isStudentId?: boolean) => Promise<{ user: User; needsReferencePhoto?: boolean } | { error: string }>;
   register: (
     email: string,
     password: string,
@@ -27,6 +27,7 @@ interface AuthContextType {
   ) => Promise<{ user: User } | { error: string }>;
   logout: () => void;
   loading: boolean;
+  saveReferencePhoto: (photo: string) => Promise<{ success: boolean } | { error: string }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -52,18 +53,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     fetchUser();
   }, []);
 
-  const login = async (email: string, password: string) => {
+  const login = async (emailOrStudentId: string, password: string, isStudentId: boolean = false) => {
     try {
-      const data = await apiFetch<{ user: User; token?: string }>('/api/auth/login', {
+      const body = isStudentId 
+        ? { student_id: emailOrStudentId, password }
+        : { email: emailOrStudentId, password };
+        
+      const data = await apiFetch<{ user: User; token?: string; needsReferencePhoto?: boolean }>('/api/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(body),
       });
 
       setUser(data.user);
       setAuthToken(data.token ?? null);
-      return { user: data.user };
+      return { user: data.user, needsReferencePhoto: data.needsReferencePhoto || false };
     } catch (error: any) {
       return { error: error.message || 'Login failed' };
+    }
+  };
+
+  const saveReferencePhoto = async (photo: string) => {
+    try {
+      await apiFetch('/api/auth/save-reference-photo', {
+        method: 'POST',
+        body: JSON.stringify({ photo }),
+      });
+      return { success: true };
+    } catch (error: any) {
+      return { error: error.message || 'Failed to save reference photo' };
     }
   };
 
@@ -97,7 +114,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, register, logout, loading }}>
+    <AuthContext.Provider value={{ user, login, register, logout, loading, saveReferencePhoto }}>
       {children}
     </AuthContext.Provider>
   );

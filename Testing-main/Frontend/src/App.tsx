@@ -13,6 +13,7 @@ import { AttendanceHistory } from "./pages/Student/AttendanceHistory";
 import { LeaveApplication } from "./pages/Student/LeaveApplication";
 import { StudentAnalytics } from "./pages/Student/StudentAnalytics";
 import { Alerts } from "./pages/Student/Alerts";
+import FaceAttendanceScan from "./pages/Student/FaceAttendanceScan";
 
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "@/components/ProtectedRoute";
@@ -68,6 +69,7 @@ const App = () => {
                 >
                   <Route index element={<StudentAnalytics />} />
                   <Route path="scanner" element={<QRScanner />} />
+                  <Route path="face-scan" element={<FaceAttendanceScan />} />
                   <Route path="history" element={<AttendanceHistory />} />
                   <Route path="leave" element={<LeaveApplication />} />
                   <Route path="alerts" element={<Alerts />} />

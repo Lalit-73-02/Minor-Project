@@ -9,6 +9,7 @@ import { authRoutes } from "./routes/authroute.js";
 import { attendanceRoutes } from "./routes/attendance.js";
 import { studentAdminRoutes } from "./routes/students.js";
 import { leaveRoutes } from "./routes/leave.js";
+import { faceAttendanceRoutes } from "./routes/faceAttendance.js";
 
 dotenv.config();
 
@@ -45,6 +46,7 @@ app.use("/api/student", studentRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/admin/students", studentAdminRoutes);
 app.use("/api/leave", leaveRoutes);
+app.use("/api/face-attendance", faceAttendanceRoutes);
 
 app.get("/test-db", (_req, res) => {
   db.query("SELECT DATABASE() AS db", (err, result) => {

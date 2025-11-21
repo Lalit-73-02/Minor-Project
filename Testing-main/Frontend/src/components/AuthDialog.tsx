@@ -3,10 +3,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { User, Mail, Lock, UserCheck } from "lucide-react";
+import { User, Mail, Lock, UserCheck, Hash } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useNavigate } from "react-router-dom";
+import { PhotoCapture } from "./PhotoCapture";
 
 interface AuthDialogProps {
   open: boolean;
@@ -23,10 +24,14 @@ interface FormData {
   department?: string;
   year?: string;
   adminPasskey?: string;
+  student_id?: string;
 }
 
 export default function AuthDialog({ open, onOpenChange, onAuthSuccess }: AuthDialogProps) {
   const [isSignUp, setIsSignUp] = useState(false);
+  const [loginMethod, setLoginMethod] = useState<"email" | "student_id">("email");
+  const [showPhotoCapture, setShowPhotoCapture] = useState(false);
+  const [pendingUser, setPendingUser] = useState<any>(null);
   const [formData, setFormData] = useState<FormData>({
     name: "",
     email: "",
@@ -36,10 +41,11 @@ export default function AuthDialog({ open, onOpenChange, onAuthSuccess }: AuthDi
     department: "",
     year: "",
     adminPasskey: "",
+    student_id: "",
   });
 
   const { toast } = useToast();
-  const { login, register } = useAuth();
+  const { login, register, saveReferencePhoto } = useAuth();
   const navigate = useNavigate();
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -99,14 +105,26 @@ export default function AuthDialog({ open, onOpenChange, onAuthSuccess }: AuthDi
 
     } else {
       // Login
-      if (!formData.email || !formData.password) {
-        toast({ title: "Error", description: "Enter email & password", variant: "destructive" });
+      const identifier = loginMethod === "student_id" ? formData.student_id : formData.email;
+      if (!identifier || !formData.password) {
+        toast({ 
+          title: "Error", 
+          description: loginMethod === "student_id" ? "Enter Student ID & password" : "Enter email & password", 
+          variant: "destructive" 
+        });
         return;
       }
 
-      const result = await login(formData.email, formData.password);
+      const result = await login(identifier, formData.password, loginMethod === "student_id");
       if ("error" in result) {
         toast({ title: "Error", description: result.error, variant: "destructive" });
+        return;
+      }
+
+      // Check if student needs to capture reference photo
+      if (result.needsReferencePhoto && result.user.role === "student") {
+        setPendingUser(result.user);
+        setShowPhotoCapture(true);
         return;
       }
 
@@ -119,7 +137,26 @@ export default function AuthDialog({ open, onOpenChange, onAuthSuccess }: AuthDi
   };
 
   const resetForm = () => {
-    setFormData({ name: "", email: "", password: "", role: "", rollNo: "", department: "", year: "", adminPasskey: "" });
+    setFormData({ name: "", email: "", password: "", role: "", rollNo: "", department: "", year: "", adminPasskey: "", student_id: "" });
+  };
+
+  const handlePhotoCapture = async (photoData: string) => {
+    try {
+      const result = await saveReferencePhoto(photoData);
+      if ("error" in result) {
+        toast({ title: "Error", description: result.error, variant: "destructive" });
+        return;
+      }
+
+      toast({ title: "Success!", description: "Reference photo saved successfully" });
+      setShowPhotoCapture(false);
+      onAuthSuccess(pendingUser);
+      onOpenChange(false);
+
+      if (pendingUser?.role === "student") navigate("/student-analytics");
+    } catch (error) {
+      toast({ title: "Error", description: "Failed to save reference photo", variant: "destructive" });
+    }
   };
 
   const toggleMode = () => { setIsSignUp(!isSignUp); resetForm(); };
@@ -142,10 +179,50 @@ export default function AuthDialog({ open, onOpenChange, onAuthSuccess }: AuthDi
             </div>
           )}
 
-          <div className="relative">
-            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
-            <Input type="email" name="email" placeholder="Email" value={formData.email} onChange={handleInputChange} className="pl-10" required />
-          </div>
+          {!isSignUp && (
+            <div className="flex gap-2 mb-2">
+              <Button
+                type="button"
+                variant={loginMethod === "email" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setLoginMethod("email")}
+                className="flex-1"
+              >
+                <Mail className="h-4 w-4 mr-2" />
+                Email
+              </Button>
+              <Button
+                type="button"
+                variant={loginMethod === "student_id" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setLoginMethod("student_id")}
+                className="flex-1"
+              >
+                <Hash className="h-4 w-4 mr-2" />
+                Student ID
+              </Button>
+            </div>
+          )}
+
+          {!isSignUp && loginMethod === "student_id" ? (
+            <div className="relative">
+              <Hash className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
+              <Input 
+                type="text" 
+                name="student_id" 
+                placeholder="Student ID (Roll Number)" 
+                value={formData.student_id} 
+                onChange={handleInputChange} 
+                className="pl-10" 
+                required 
+              />
+            </div>
+          ) : (
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
+              <Input type="email" name="email" placeholder="Email" value={formData.email} onChange={handleInputChange} className="pl-10" required />
+            </div>
+          )}
 
           <div className="relative">
             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
@@ -197,6 +274,18 @@ export default function AuthDialog({ open, onOpenChange, onAuthSuccess }: AuthDi
           <button onClick={toggleMode} className="text-primary hover:underline font-medium">{isSignUp ? "Sign In" : "Sign Up"}</button>
         </div>
       </DialogContent>
+
+      {showPhotoCapture && (
+        <PhotoCapture
+          onCapture={handlePhotoCapture}
+          onCancel={() => {
+            setShowPhotoCapture(false);
+            setPendingUser(null);
+          }}
+          title="Capture Reference Photo"
+          description="This photo will be used for face recognition. Please ensure good lighting and a clear view of your face."
+        />
+      )}
     </Dialog>
   );
 }
