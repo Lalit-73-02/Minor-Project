@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { MapPin, Wifi, CheckCircle, XCircle, AlertTriangle, Radio, Camera, User } from "lucide-react";
 import { verifyLocation, verifyWiFi } from "../../utils/security";
 import { useAuth } from "@/hooks/useAuth";
+import { useQueryClient } from "@tanstack/react-query";
 
 const BACKEND_URL = `http://${window.location.hostname}:5000`;
 
@@ -17,6 +18,7 @@ interface Student {
 
 const QRScanner: React.FC = () => {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const locationWatchId = useRef<number | null>(null);
   const checkIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastMarkedTimeRef = useRef<number>(0);
@@ -24,6 +26,7 @@ const QRScanner: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const inRangeRef = useRef<boolean>(false);
+  const watchAttemptsRef = useRef<number>(0);
 
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
   const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -63,28 +66,58 @@ const QRScanner: React.FC = () => {
       const res = await fetch(`${BACKEND_URL}/api/qrcode/active`);
       const data = await res.json();
 
-      if (!res.ok || !data.active || !data.qr) {
+      // Only log if there's an issue or first time
+      if (!data.active || !data.qr) {
+        console.log("Active QR API Response:", {
+          status: res.status,
+          ok: res.ok,
+          active: data.active,
+          hasQR: !!data.qr,
+          message: data.message
+        });
+      }
+
+      // Check if response indicates no active QR
+      if (data.active === false || !data.qr) {
+        console.log("No active QR session:", data.message || "No active session");
         setCampusLocation(null);
+        setLoadingCampusLocation(false);
         return;
       }
 
+      // If we have active QR, process it
       const record = data.qr;
-      if (record.latitude && record.longitude && record.radius) {
+      
+      // Check if location values exist and are not null/undefined
+      const lat = record.latitude != null ? parseFloat(record.latitude) : null;
+      const lng = record.longitude != null ? parseFloat(record.longitude) : null;
+      const radius = record.radius != null ? parseInt(record.radius, 10) : 2000;
+
+      if (lat != null && lng != null && !isNaN(lat) && !isNaN(lng)) {
         setCampusLocation({
-          latitude: parseFloat(record.latitude),
-          longitude: parseFloat(record.longitude),
-          radius: parseInt(record.radius, 10),
+          latitude: lat,
+          longitude: lng,
+          radius: radius || 2000,
         });
+        console.log("✅ Campus location set:", { latitude: lat, longitude: lng, radius: radius || 2000 });
       } else {
+        console.warn("⚠️ Invalid location data in QR:", {
+          lat,
+          lng,
+          radius,
+          rawRecord: record
+        });
         setCampusLocation(null);
       }
-    } catch {
+    } catch (error) {
+      console.error("❌ Error fetching active QR location:", error);
       setCampusLocation(null);
     } finally {
       setLoadingCampusLocation(false);
     }
   };
 
+  // Initial load - run only once
   useEffect(() => {
     fetchCurrentUser();
     fetchActiveQRLocation();
@@ -99,8 +132,35 @@ const QRScanner: React.FC = () => {
       }
       stopCamera();
     };
-    // eslint-disable-next-line
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Separate polling effect - only poll if no campus location found
+  // Use ref to avoid dependency issues
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  useEffect(() => {
+    // Clear any existing poll interval
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+
+    // Only poll if we don't have a campus location
+    if (!campusLocation) {
+      // Poll for active QR every 10 seconds to catch newly generated sessions
+      pollIntervalRef.current = setInterval(() => {
+        fetchActiveQRLocation();
+      }, 10000);
+    }
+
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, [campusLocation]);
 
   const locationValid =
     location &&
@@ -113,23 +173,118 @@ const QRScanner: React.FC = () => {
       campusLocation.radius ?? 2000
     );
 
-  // Start camera for verification
+  // Capture photo directly from camera (no video preview)
   const startCamera = async () => {
     try {
+      setIsCapturing(true);
+      setShowCamera(true);
+      
+      // Get camera stream
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: 640, height: 480 },
+        video: { 
+          facingMode: "user", 
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        },
         audio: false,
       });
       streamRef.current = stream;
+      
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        const video = videoRef.current;
+        video.srcObject = stream;
+        
+        // Wait for video to be ready and capture immediately
+        await new Promise<void>((resolve, reject) => {
+          const onLoadedMetadata = () => {
+            video.play()
+              .then(() => {
+                // Wait a moment for camera to stabilize
+                setTimeout(() => {
+                  if (video.readyState >= 2 && video.videoWidth > 0) {
+                    // Capture photo immediately
+                    capturePhotoDirectly();
+                    video.removeEventListener('loadedmetadata', onLoadedMetadata);
+                    video.removeEventListener('error', onError);
+                    resolve();
+                  }
+                }, 1000);
+              })
+              .catch(reject);
+          };
+          
+          const onError = (err: Event) => {
+            video.removeEventListener('loadedmetadata', onLoadedMetadata);
+            video.removeEventListener('error', onError);
+            reject(new Error("Camera failed"));
+          };
+          
+          video.addEventListener('loadedmetadata', onLoadedMetadata);
+          video.addEventListener('error', onError);
+          
+          // Fallback timeout
+          setTimeout(() => {
+            if (video.readyState >= 2 && video.videoWidth > 0) {
+              capturePhotoDirectly();
+              video.removeEventListener('loadedmetadata', onLoadedMetadata);
+              video.removeEventListener('error', onError);
+              resolve();
+            }
+          }, 3000);
+        });
       }
-      setShowCamera(true);
-      setCapturedPhoto(null);
     } catch (error) {
       console.error("Camera error:", error);
+      setIsCapturing(false);
+      setShowCamera(false);
       setResult({ success: false, message: "Camera access denied. Please allow camera access to mark attendance." });
+    }
+  };
+
+  // Capture photo directly without user interaction
+  const capturePhotoDirectly = () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) {
+      console.error("Video or canvas not available");
+      setIsCapturing(false);
+      return;
+    }
+
+    try {
+      const width = video.videoWidth || 640;
+      const height = video.videoHeight || 480;
+      
+      if (width === 0 || height === 0) {
+        console.error("Invalid video dimensions");
+        setIsCapturing(false);
+        return;
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, width, height);
+        const photoData = canvas.toDataURL("image/jpeg", 0.8);
+        setCapturedPhoto(photoData);
+        setIsCapturing(false);
+        
+        // Stop camera stream immediately after capture
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((track) => track.stop());
+          streamRef.current = null;
+        }
+        if (videoRef.current) {
+          videoRef.current.srcObject = null;
+        }
+      } else {
+        console.error("Could not get canvas context");
+        setIsCapturing(false);
+      }
+    } catch (error) {
+      console.error("Error capturing photo:", error);
+      setIsCapturing(false);
     }
   };
 
@@ -146,26 +301,61 @@ const QRScanner: React.FC = () => {
     setCapturedPhoto(null);
   };
 
-  // Capture photo from camera
-  const capturePhoto = () => {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas) return;
+  // Retake photo - restart camera
+  const retakePhoto = () => {
+    setCapturedPhoto(null);
+    setIsCapturing(false);
+    startCamera();
+  };
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.drawImage(video, 0, 0);
-      const photoData = canvas.toDataURL("image/jpeg", 0.8);
-      setCapturedPhoto(photoData);
-      setIsCapturing(true);
-    }
+  // Helper function to get location with high accuracy and retry logic
+  const getHighAccuracyLocation = (retries = 3, useHighAccuracy = true): Promise<GeolocationPosition> => {
+    return new Promise((resolve, reject) => {
+      let attempts = 0;
+      
+      const tryGetLocation = (highAccuracy: boolean) => {
+        attempts++;
+        
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            // Check if accuracy is acceptable (within 50 meters) or if we've tried enough
+            if (position.coords.accuracy <= 50 || attempts >= retries || !highAccuracy) {
+              resolve(position);
+            } else if (attempts < retries) {
+              // Retry for better accuracy
+              setTimeout(() => tryGetLocation(highAccuracy), 2000);
+            } else {
+              // Accept current position even if accuracy is not ideal
+              resolve(position);
+            }
+          },
+          (error) => {
+            // If timeout with high accuracy, try with lower accuracy
+            if (error.code === 3 && highAccuracy && attempts < retries) {
+              console.warn("High accuracy timeout, trying with standard accuracy...");
+              setTimeout(() => tryGetLocation(false), 1000);
+            } else if (attempts < retries) {
+              // Retry on other errors
+              setTimeout(() => tryGetLocation(highAccuracy), 2000);
+            } else {
+              reject(error);
+            }
+          },
+          {
+            enableHighAccuracy: highAccuracy,
+            maximumAge: highAccuracy ? 0 : 30000, // Allow 30s cache if not high accuracy
+            timeout: highAccuracy ? 15000 : 20000, // Longer timeout for high accuracy
+          }
+        );
+      };
+      
+      tryGetLocation(useHighAccuracy);
+    });
   };
 
   // Mark attendance by location with camera verification
   const markAttendanceByLocation = async (photoData?: string) => {
-    if (!currentStudent || !location) {
+    if (!currentStudent) {
       return;
     }
 
@@ -182,39 +372,94 @@ const QRScanner: React.FC = () => {
     }
 
     try {
-      // Send photo and location to backend
-      const res = await fetch(`${BACKEND_URL}/api/qrcode/mark-by-location`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          studentId: currentStudent.rollNo,
-          latitude: location.latitude,
-          longitude: location.longitude,
-          photo: photoData, // Base64 encoded photo
-        }),
+      setIsCapturing(true);
+      
+      // Get fresh location with timeout
+      let currentLocation = location;
+      const locationPromise = getHighAccuracyLocation(1, false).then(
+        (freshPosition) => {
+          return {
+            latitude: freshPosition.coords.latitude,
+            longitude: freshPosition.coords.longitude,
+          };
+        }
+      ).catch((error) => {
+        console.warn("Failed to get fresh location, using cached:", error);
+        return null;
       });
-      const data = await res.json();
-      if (res.ok) {
-        lastMarkedTimeRef.current = now;
-        stopCamera();
-        setCapturedPhoto(null);
+
+      // Wait max 5 seconds for location
+      const locationTimeout = new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), 5000);
+      });
+
+      const locationResult = await Promise.race([locationPromise, locationTimeout]);
+      
+      if (locationResult) {
+        currentLocation = locationResult;
+        setLocation(currentLocation);
+      } else if (!currentLocation) {
+        setResult({ success: false, message: "Unable to get your location. Please try again." });
         setIsCapturing(false);
-        setResult({ success: true, message: data.message || "Attendance marked successfully!" });
-        // Clear success message after 5 seconds
-        setTimeout(() => setResult(null), 5000);
-        inRangeRef.current = false;
-      } else {
-        setResult({ success: false, message: data.message || "Failed to mark attendance" });
+        return;
+      }
+
+      // Send photo and location to backend with timeout
+      const controller = new AbortController();
+      const fetchTimeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/qrcode/mark-by-location`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            studentId: currentStudent.rollNo,
+            latitude: currentLocation.latitude,
+            longitude: currentLocation.longitude,
+            photo: photoData, // Base64 encoded photo
+          }),
+          signal: controller.signal,
+        });
+        
+        clearTimeout(fetchTimeout);
+        const data = await res.json();
+        
+        if (res.ok) {
+          lastMarkedTimeRef.current = now;
+          stopCamera();
+          setCapturedPhoto(null);
+          setIsCapturing(false);
+          setResult({ success: true, message: data.message || "Attendance marked successfully!" });
+          // Clear success message after 5 seconds
+          setTimeout(() => setResult(null), 5000);
+          inRangeRef.current = false;
+          
+          // Invalidate attendance queries to refresh data everywhere
+          queryClient.invalidateQueries({ queryKey: ['student-attendance'] });
+          queryClient.invalidateQueries({ queryKey: ['attendance-records'] });
+          queryClient.invalidateQueries({ queryKey: ['student-analytics'] });
+        } else {
+          setResult({ success: false, message: data.message || "Failed to mark attendance" });
+          setIsCapturing(false);
+        }
+      } catch (fetchError: any) {
+        clearTimeout(fetchTimeout);
+        if (fetchError.name === 'AbortError') {
+          setResult({ success: false, message: "Request timed out. Please check your connection and try again." });
+        } else {
+          throw fetchError;
+        }
         setIsCapturing(false);
       }
     } catch (err) {
+      console.error("Error marking attendance:", err);
       setResult({ success: false, message: "Server error. Please try again." });
       setIsCapturing(false);
     }
   };
 
   // Start real-time location tracking
-  const startLocationTracking = () => {
+  const startLocationTracking = async () => {
     if (loadingStudent || !currentStudent) {
       setResult({ success: false, message: "Student data not loaded yet" });
       return;
@@ -233,45 +478,91 @@ const QRScanner: React.FC = () => {
     setIsTracking(true);
     setResult(null);
 
-    // Watch position for real-time updates
-    locationWatchId.current = navigator.geolocation.watchPosition(
-      (pos) => {
-        const newLocation = {
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-        };
-        setLocation(newLocation);
+    // First, get initial high-accuracy location with retries
+    try {
+      const initialPosition = await getHighAccuracyLocation(3);
+      const initialLocation = {
+        latitude: initialPosition.coords.latitude,
+        longitude: initialPosition.coords.longitude,
+      };
+      setLocation(initialLocation);
+    } catch (error) {
+      console.error("Failed to get initial location:", error);
+      setResult({ 
+        success: false, 
+        message: "Unable to get your location. Please enable location services and try again." 
+      });
+      setIsTracking(false);
+      return;
+    }
 
-        // Check if in range
-        const isInRange =
-          campusLocation &&
-          verifyLocation(
-            newLocation.latitude,
-            newLocation.longitude,
-            campusLocation.latitude,
-            campusLocation.longitude,
-            campusLocation.radius ?? 2000
-          );
-
-        // If entered range and not already marked, show camera verification
-        if (isInRange && !inRangeRef.current && !showCamera && !isCapturing) {
-          inRangeRef.current = true;
-          markAttendanceByLocation(); // This will trigger camera
-        } else if (!isInRange) {
-          inRangeRef.current = false;
-        }
-      },
-      (error) => {
-        console.error("Geolocation error:", error);
-        setResult({ success: false, message: "Location access denied. Please enable location services." });
-        setIsTracking(false);
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 5000, // Update every 5 seconds
+    // Then watch position for real-time updates
+    // Start with high accuracy, fallback to standard if timeout
+    watchAttemptsRef.current = 0;
+    const startWatch = (highAccuracy: boolean) => {
+      if (locationWatchId.current !== null) {
+        navigator.geolocation.clearWatch(locationWatchId.current);
       }
-    );
+      
+      locationWatchId.current = navigator.geolocation.watchPosition(
+        (pos) => {
+          const newLocation = {
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          };
+          setLocation(newLocation);
+
+          // Check if in range
+          const isInRange =
+            campusLocation &&
+            verifyLocation(
+              newLocation.latitude,
+              newLocation.longitude,
+              campusLocation.latitude,
+              campusLocation.longitude,
+              campusLocation.radius ?? 2000
+            );
+
+          // If entered range and not already marked, show camera verification
+          if (isInRange && !inRangeRef.current && !showCamera && !isCapturing) {
+            inRangeRef.current = true;
+            markAttendanceByLocation(); // This will trigger camera
+          } else if (!isInRange) {
+            inRangeRef.current = false;
+          }
+        },
+        (error) => {
+          console.error("Geolocation error:", error);
+          
+          // Handle timeout specifically
+          if (error.code === 3 && highAccuracy && watchAttemptsRef.current === 0) {
+            // Timeout with high accuracy, try with standard accuracy
+            watchAttemptsRef.current++;
+            console.warn("High accuracy timeout, switching to standard accuracy...");
+            startWatch(false);
+          } else {
+            // Other errors or already tried standard accuracy
+            let errorMessage = "Location access error. ";
+            if (error.code === 1) {
+              errorMessage += "Please enable location permissions.";
+            } else if (error.code === 2) {
+              errorMessage += "Location unavailable.";
+            } else if (error.code === 3) {
+              errorMessage += "Location request timed out. Please try again.";
+            }
+            setResult({ success: false, message: errorMessage });
+            setIsTracking(false);
+          }
+        },
+        {
+          enableHighAccuracy: highAccuracy,
+          maximumAge: highAccuracy ? 5000 : 30000, // Allow some cache to avoid timeout
+          timeout: highAccuracy ? 20000 : 30000, // Longer timeout
+        }
+      );
+    };
+
+    startWatch(true); // Start with high accuracy
 
     // Also check periodically (every 10 seconds) if in range
     checkIntervalRef.current = setInterval(() => {
@@ -305,11 +596,6 @@ const QRScanner: React.FC = () => {
     }
   };
 
-  // Retake photo
-  const retakePhoto = () => {
-    setCapturedPhoto(null);
-    setIsCapturing(false);
-  };
 
   const locationStatus = !location
     ? { icon: AlertTriangle, color: "text-yellow-500", text: "Getting location..." }
@@ -361,7 +647,19 @@ const QRScanner: React.FC = () => {
         ) : !currentStudent ? (
           <div className="text-red-500 mt-4">Student data not available</div>
         ) : !campusLocation ? (
-          <div className="text-red-500 mt-4">No active attendance session found. Please ask admin to start a session.</div>
+          <div className="space-y-4">
+            <div className="text-red-500 mt-4">No active attendance session found. Please ask admin to start a session.</div>
+            <button
+              onClick={() => {
+                setLoadingCampusLocation(true);
+                fetchActiveQRLocation();
+              }}
+              className="px-6 py-3 bg-primary text-white rounded-xl hover:bg-primary/90 transition-colors"
+              disabled={loadingCampusLocation}
+            >
+              {loadingCampusLocation ? "Refreshing..." : "Refresh Session"}
+            </button>
+          </div>
         ) : !isTracking ? (
           <>
             <p className="text-muted-foreground mt-4 mb-4">
@@ -402,10 +700,21 @@ const QRScanner: React.FC = () => {
 
                   {!capturedPhoto ? (
                     <>
-                      <div className="relative bg-black rounded-lg overflow-hidden mx-auto max-w-md">
+                      <div className="relative bg-black rounded-lg overflow-hidden mx-auto max-w-md aspect-video flex items-center justify-center">
+                        {isCapturing ? (
+                          <div className="text-white text-center">
+                            <div className="animate-spin h-8 w-8 border-4 border-white border-t-transparent rounded-full mx-auto mb-2"></div>
+                            <p>Capturing photo...</p>
+                          </div>
+                        ) : (
+                          <div className="text-white text-center">
+                            <Camera className="h-12 w-12 mx-auto mb-2" />
+                            <p>Photo will be captured automatically</p>
+                          </div>
+                        )}
                         <video
                           ref={videoRef}
-                          className="w-full h-auto"
+                          className="hidden"
                           playsInline
                           muted
                           autoPlay
@@ -413,13 +722,6 @@ const QRScanner: React.FC = () => {
                         <canvas ref={canvasRef} className="hidden" />
                       </div>
                       <div className="flex gap-3 justify-center">
-                        <button
-                          onClick={capturePhoto}
-                          className="px-6 py-3 bg-primary text-white rounded-xl hover:bg-primary/90 transition-colors flex items-center gap-2"
-                        >
-                          <Camera className="h-5 w-5" />
-                          Capture Photo
-                        </button>
                         <button
                           onClick={stopCamera}
                           className="px-6 py-3 bg-gray-500 text-white rounded-xl hover:bg-gray-600 transition-colors"

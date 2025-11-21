@@ -13,7 +13,14 @@ const issueToken = (res, payload, { setCookie = true } = {}) => {
   });
 
   if (setCookie) {
-    res.cookie("attendo_token", token, {
+    // Use separate cookie names for admin and student to prevent session overwrite
+    const cookieName = payload.role === "admin" ? "attendo_admin_token" : "attendo_student_token";
+    
+    // Clear the other role's cookie if it exists
+    const otherCookieName = payload.role === "admin" ? "attendo_student_token" : "attendo_admin_token";
+    res.clearCookie(otherCookieName);
+    
+    res.cookie(cookieName, token, {
       httpOnly: true,
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
@@ -173,7 +180,9 @@ router.post(
 );
 
 router.post("/logout", (req, res) => {
-  res.clearCookie("attendo_token");
+  // Clear both admin and student cookies
+  res.clearCookie("attendo_admin_token");
+  res.clearCookie("attendo_student_token");
   return res.json({ message: "Logged out" });
 });
 

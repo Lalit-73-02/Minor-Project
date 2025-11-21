@@ -6,7 +6,11 @@ export const authenticate = (req, res, next) => {
     const bearerToken = authHeader?.startsWith("Bearer ")
       ? authHeader.split(" ")[1]
       : null;
-    const token = req.cookies?.attendo_token || bearerToken;
+    
+    // Check both admin and student cookies to prevent session overwrite
+    const token = bearerToken || 
+                  req.cookies?.attendo_admin_token || 
+                  req.cookies?.attendo_student_token;
 
     if (!token) {
       return res.status(401).json({ message: "Authentication required" });

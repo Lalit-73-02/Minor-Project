@@ -26,6 +26,17 @@ router.get(
     const { startDate, endDate, department } = req.query;
 
     try {
+      // Check if verification_photo column exists
+      let hasPhotoColumn = false;
+      try {
+        const [columns] = await dbPromise.query(
+          `SHOW COLUMNS FROM attendance LIKE 'verification_photo'`
+        );
+        hasPhotoColumn = columns && columns.length > 0;
+      } catch (err) {
+        console.log("Checking photo column:", err);
+      }
+
       const conditions = [];
       const params = [];
 
@@ -48,33 +59,64 @@ router.get(
         ? `WHERE ${conditions.join(" AND ")}`
         : "";
 
-      const [rows] = await dbPromise.query(
-        `
-        SELECT 
-          a.id,
-          a.student_id AS rollNo,
-          u.name AS studentName,
-          u.email AS studentEmail,
-          s.department,
-          s.year,
-          a.session_type AS sessionType,
-          a.marked_at AS markedAt,
-          qr.generated_at AS qrGeneratedAt
-        FROM attendance a
-        JOIN student_details s ON s.roll_no = a.student_id
-        JOIN users u ON u.id = s.user_id
-        JOIN qr_codes_admin qr ON qr.id = a.qr_id
-        ${whereClause}
-        ORDER BY a.marked_at DESC
-        LIMIT 1000
-        `,
-        params
-      );
+      // Build query with or without photo column
+      let query;
+      if (hasPhotoColumn) {
+        query = `
+          SELECT 
+            a.id,
+            a.student_id AS rollNo,
+            u.name AS studentName,
+            u.email AS studentEmail,
+            s.department,
+            s.year,
+            a.session_type AS sessionType,
+            a.marked_at AS markedAt,
+            qr.generated_at AS qrGeneratedAt,
+            a.verification_photo AS verificationPhoto
+          FROM attendance a
+          JOIN student_details s ON s.roll_no = a.student_id
+          JOIN users u ON u.id = s.user_id
+          JOIN qr_codes_admin qr ON qr.id = a.qr_id
+          ${whereClause}
+          ORDER BY a.marked_at DESC
+          LIMIT 1000
+        `;
+      } else {
+        query = `
+          SELECT 
+            a.id,
+            a.student_id AS rollNo,
+            u.name AS studentName,
+            u.email AS studentEmail,
+            s.department,
+            s.year,
+            a.session_type AS sessionType,
+            a.marked_at AS markedAt,
+            qr.generated_at AS qrGeneratedAt
+          FROM attendance a
+          JOIN student_details s ON s.roll_no = a.student_id
+          JOIN users u ON u.id = s.user_id
+          JOIN qr_codes_admin qr ON qr.id = a.qr_id
+          ${whereClause}
+          ORDER BY a.marked_at DESC
+          LIMIT 1000
+        `;
+      }
+
+      const [rows] = await dbPromise.query(query, params);
 
       return res.json({ records: rows });
     } catch (error) {
       console.error("Attendance fetch error", error);
-      return res.status(500).json({ message: "Failed to load attendance" });
+      console.error("Error details:", {
+        message: error.message,
+        stack: error.stack
+      });
+      return res.status(500).json({ 
+        message: "Failed to load attendance",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
     }
   }
 );
@@ -100,20 +142,48 @@ router.get(
 
       const { start, end } = getWindowRange();
 
-      const [records] = await dbPromise.query(
-        `
-        SELECT 
-          a.id,
-          a.session_type AS sessionType,
-          a.marked_at AS markedAt,
-          DATE(a.marked_at) AS attendanceDate
-        FROM attendance a
-        WHERE a.student_id = ?
-        ORDER BY a.marked_at DESC
-        LIMIT 200
-        `,
-        [rollNo]
-      );
+      // Check if verification_photo column exists
+      let hasPhotoColumn = false;
+      try {
+        const [columns] = await dbPromise.query(
+          `SHOW COLUMNS FROM attendance LIKE 'verification_photo'`
+        );
+        hasPhotoColumn = columns && columns.length > 0;
+      } catch (err) {
+        console.log("Checking photo column:", err);
+      }
+
+      // Build query with or without photo column
+      let query;
+      
+      if (hasPhotoColumn) {
+        query = `
+          SELECT 
+            a.id,
+            a.session_type AS sessionType,
+            a.marked_at AS markedAt,
+            DATE(a.marked_at) AS attendanceDate,
+            a.verification_photo AS verificationPhoto
+          FROM attendance a
+          WHERE a.student_id = ?
+          ORDER BY a.marked_at DESC
+          LIMIT 200
+        `;
+      } else {
+        query = `
+          SELECT 
+            a.id,
+            a.session_type AS sessionType,
+            a.marked_at AS markedAt,
+            DATE(a.marked_at) AS attendanceDate
+          FROM attendance a
+          WHERE a.student_id = ?
+          ORDER BY a.marked_at DESC
+          LIMIT 200
+        `;
+      }
+      
+      const [records] = await dbPromise.query(query, [rollNo]);
 
       const uniqueDays = new Set(
         records
@@ -137,7 +207,15 @@ router.get(
       });
     } catch (error) {
       console.error("Student attendance error", error);
-      return res.status(500).json({ message: "Unable to load student data" });
+      console.error("Error details:", {
+        message: error.message,
+        stack: error.stack,
+        rollNo: rollNo
+      });
+      return res.status(500).json({ 
+        message: "Unable to load student data",
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
     }
   }
 );

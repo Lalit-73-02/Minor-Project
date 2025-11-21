@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Download, FileText, Filter, Calendar } from 'lucide-react';
+import { Download, FileText, Filter, Calendar, Camera, Eye, X } from 'lucide-react';
 import { exportToPDF, exportToExcel } from '../../utils/exportUtils';
 import { format } from 'date-fns';
 import { useQuery } from '@tanstack/react-query';
@@ -12,6 +12,7 @@ type AttendanceRecord = {
   department: string;
   sessionType: string;
   markedAt: string;
+  verificationPhoto?: string | null;
 };
 
 type StudentSummary = {
@@ -35,7 +36,9 @@ export const AttendanceReports: React.FC = () => {
     queryFn: () => apiFetch<{ students: StudentSummary[] }>('/api/admin/students'),
   });
 
-  const { data: attendanceData, isLoading } = useQuery({
+  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+  
+  const { data: attendanceData, isLoading, refetch } = useQuery({
     queryKey: ['attendance-records', dateFilter, departmentFilter],
     queryFn: () => {
       const params = new URLSearchParams();
@@ -45,6 +48,7 @@ export const AttendanceReports: React.FC = () => {
       const query = params.toString() ? `?${params.toString()}` : '';
       return apiFetch<{ records: AttendanceRecord[] }>(`/api/attendance${query}`);
     },
+    refetchInterval: 10000, // Auto-refresh every 10 seconds
   });
 
   const students = studentData?.students ?? [];
@@ -175,12 +179,15 @@ export const AttendanceReports: React.FC = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
                   Marked At
                 </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Verification
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {filteredRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">
+                  <td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">
                     No attendance records found for the selected filters.
                   </td>
                 </tr>
@@ -197,6 +204,19 @@ export const AttendanceReports: React.FC = () => {
                     <td className="px-6 py-4 text-sm">{record.department || 'N/A'}</td>
                     <td className="px-6 py-4 text-sm capitalize">{record.sessionType}</td>
                     <td className="px-6 py-4 text-sm">{format(new Date(record.markedAt), 'pp')}</td>
+                    <td className="px-6 py-4">
+                      {record.verificationPhoto ? (
+                        <button
+                          onClick={() => setSelectedPhoto(record.verificationPhoto!)}
+                          className="flex items-center space-x-2 px-3 py-1 bg-primary/10 text-primary rounded-lg hover:bg-primary/20 transition-colors"
+                        >
+                          <Camera className="h-4 w-4" />
+                          <span className="text-sm">View Photo</span>
+                        </button>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">No photo</span>
+                      )}
+                    </td>
                   </tr>
                 ))
               )}
@@ -230,12 +250,48 @@ export const AttendanceReports: React.FC = () => {
                   <p>
                     <span className="font-semibold">Marked At:</span> {format(new Date(record.markedAt), 'pp')}
                   </p>
+                  {record.verificationPhoto && (
+                    <div className="mt-3">
+                      <button
+                        onClick={() => setSelectedPhoto(record.verificationPhoto!)}
+                        className="flex items-center space-x-2 px-3 py-2 bg-primary/10 text-primary rounded-lg hover:bg-primary/20 transition-colors w-full"
+                      >
+                        <Camera className="h-4 w-4" />
+                        <span className="text-sm">View Verification Photo</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
           )}
         </div>
       </div>
+
+      {/* Photo Modal */}
+      {selectedPhoto && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+          <div className="bg-background rounded-xl max-w-2xl w-full max-h-[90vh] overflow-auto relative">
+            <button
+              onClick={() => setSelectedPhoto(null)}
+              className="absolute top-4 right-4 p-2 bg-muted rounded-full hover:bg-muted/80 transition-colors z-10"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <div className="p-6">
+              <h3 className="text-xl font-bold mb-4 flex items-center space-x-2">
+                <Camera className="h-5 w-5" />
+                <span>Verification Photo</span>
+              </h3>
+              <img
+                src={selectedPhoto}
+                alt="Verification"
+                className="w-full h-auto rounded-lg border border-border"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Calendar, Filter, CheckCircle, Clock } from 'lucide-react';
+import { Calendar, Filter, CheckCircle, Clock, Camera, Eye, X } from 'lucide-react';
 import { format } from 'date-fns';
 import { useAuth } from '@/hooks/useAuth';
 import { useQuery } from '@tanstack/react-query';
@@ -10,6 +10,7 @@ type StudentAttendanceResponse = {
     id: number;
     sessionType: 'check-in' | 'check-out';
     markedAt: string;
+    verificationPhoto?: string | null;
   }[];
   stats: {
     presentDays: number;
@@ -21,12 +22,14 @@ type StudentAttendanceResponse = {
 export const AttendanceHistory: React.FC = () => {
   const { user } = useAuth();
   const [filterMonth, setFilterMonth] = useState('');
+  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, refetch } = useQuery({
     queryKey: ['student-attendance', user?.rollNo],
     enabled: Boolean(user?.rollNo),
     queryFn: () =>
       apiFetch<StudentAttendanceResponse>(`/api/attendance/student/${user?.rollNo}`),
+    refetchInterval: 10000, // Auto-refresh every 10 seconds
   });
 
   const records = data?.records ?? [];
@@ -122,9 +125,9 @@ export const AttendanceHistory: React.FC = () => {
             {filteredRecords.map((record) => (
               <div key={record.id} className="p-6 hover:bg-muted/50 transition-colors">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4">
+                  <div className="flex items-center space-x-4 flex-1">
                     {getIcon(record.sessionType)}
-                    <div>
+                    <div className="flex-1">
                       <div className="text-lg font-semibold text-foreground">
                         {format(new Date(record.markedAt), 'EEEE, MMMM d, yyyy')}
                       </div>
@@ -134,12 +137,46 @@ export const AttendanceHistory: React.FC = () => {
                       </div>
                     </div>
                   </div>
+                  {record.verificationPhoto && (
+                    <button
+                      onClick={() => setSelectedPhoto(record.verificationPhoto!)}
+                      className="flex items-center space-x-2 px-3 py-2 bg-primary/10 text-primary rounded-lg hover:bg-primary/20 transition-colors"
+                    >
+                      <Camera className="h-4 w-4" />
+                      <span className="text-sm">View Photo</span>
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* Photo Modal */}
+      {selectedPhoto && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+          <div className="bg-background rounded-xl max-w-2xl w-full max-h-[90vh] overflow-auto relative">
+            <button
+              onClick={() => setSelectedPhoto(null)}
+              className="absolute top-4 right-4 p-2 bg-muted rounded-full hover:bg-muted/80 transition-colors z-10"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <div className="p-6">
+              <h3 className="text-xl font-bold mb-4 flex items-center space-x-2">
+                <Camera className="h-5 w-5" />
+                <span>Verification Photo</span>
+              </h3>
+              <img
+                src={selectedPhoto}
+                alt="Verification"
+                className="w-full h-auto rounded-lg border border-border"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
