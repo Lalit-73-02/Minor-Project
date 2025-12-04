@@ -1,5 +1,9 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { useToast } from "@/hooks/use-toast";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Camera, Upload } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
 import { subDays, eachDayOfInterval, format } from "date-fns";
@@ -50,7 +54,38 @@ type StudentAttendanceResponse = {
 };
 
 export const StudentAnalytics: React.FC = () => {
-  const { user } = useAuth();
+  const { user, saveReferencePhoto } = useAuth();
+  const { toast } = useToast();
+  const [isUploading, setIsUploading] = useState(false);
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const base64 = reader.result as string;
+      const result = await saveReferencePhoto(base64);
+
+      if ("error" in result) {
+        toast({
+          title: "Upload Failed",
+          description: result.error,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Success",
+          description: "Reference photo updated successfully. Please refresh to see changes.",
+        });
+        // Optionally reload page or update user context
+        window.location.reload();
+      }
+      setIsUploading(false);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const { data, isLoading } = useQuery({
     queryKey: ["student-analytics", user?.rollNo],
@@ -235,6 +270,42 @@ export const StudentAnalytics: React.FC = () => {
         </ul>
       </div>
 
+      <div className="glass p-6 rounded-xl shadow-lg hover-glow transition-all duration-300 transform hover:scale-105">
+        <h3 className="text-lg font-semibold text-foreground mb-4">Reference Photo</h3>
+        <div className="flex flex-col items-center space-y-4">
+          {user.referencePhoto ? (
+            <div className="relative w-32 h-32 rounded-full overflow-hidden border-4 border-primary/20">
+              <img
+                src={user.referencePhoto}
+                alt="Reference"
+                className="w-full h-full object-cover"
+              />
+            </div>
+          ) : (
+            <div className="w-32 h-32 rounded-full bg-muted flex items-center justify-center border-4 border-dashed border-muted-foreground/30">
+              <Camera className="h-12 w-12 text-muted-foreground" />
+            </div>
+          )}
+
+          <div className="w-full">
+            <label htmlFor="photo-upload" className="cursor-pointer w-full">
+              <div className="flex items-center justify-center w-full px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors">
+                <Upload className="h-4 w-4 mr-2" />
+                {isUploading ? "Uploading..." : "Update Photo"}
+              </div>
+              <Input
+                id="photo-upload"
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handlePhotoUpload}
+                disabled={isUploading}
+              />
+            </label>
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {statsCards.map((stat, index) => {
           const Icon = stat.icon;
@@ -302,7 +373,7 @@ export const StudentAnalytics: React.FC = () => {
           />
         </div>
       </div>
-    </div>
+    </div >
   );
 };
 

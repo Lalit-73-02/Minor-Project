@@ -22,11 +22,11 @@ const issueToken = (res, payload, { setCookie = true } = {}) => {
   if (setCookie) {
     // Use separate cookie names for admin and student to prevent session overwrite
     const cookieName = payload.role === "admin" ? "attendo_admin_token" : "attendo_student_token";
-    
+
     // Clear the other role's cookie if it exists
     const otherCookieName = payload.role === "admin" ? "attendo_student_token" : "attendo_admin_token";
     res.clearCookie(otherCookieName);
-    
+
     res.cookie(cookieName, token, {
       httpOnly: true,
       sameSite: "lax",
@@ -55,6 +55,7 @@ const formatUserPayload = (user, studentProfile) => ({
   rollNo: studentProfile?.roll_no || null,
   department: studentProfile?.department || null,
   year: studentProfile?.year || null,
+  referencePhoto: studentProfile?.reference_photo || null,
   createdAt: user.created_at,
 });
 
@@ -105,10 +106,35 @@ router.post(
               .json({ message: "Student details are required" });
           }
 
+          let referencePhotoPath = null;
+          if (req.body.referencePhoto) {
+            try {
+              const uploadsDir = path.join(__dirname, "../uploads/reference_photos");
+              if (!fs.existsSync(uploadsDir)) {
+                fs.mkdirSync(uploadsDir, { recursive: true });
+              }
+
+              let imageData = req.body.referencePhoto;
+              if (imageData.startsWith("data:")) {
+                imageData = imageData.split(",")[1];
+              }
+
+              const buffer = Buffer.from(imageData, "base64");
+              const filename = `ref_${rollNo}_${Date.now()}.jpg`;
+              const filepath = path.join(uploadsDir, filename);
+              referencePhotoPath = `/uploads/reference_photos/${filename}`;
+
+              fs.writeFileSync(filepath, buffer);
+            } catch (err) {
+              console.error("Error saving reference photo:", err);
+              // Continue without photo if save fails, or you could rollback
+            }
+          }
+
           await connection.query(
-            `INSERT INTO student_details (user_id, roll_no, department, year)
-             VALUES (?, ?, ?, ?)`,
-            [userId, rollNo, department, year]
+            `INSERT INTO student_details (user_id, roll_no, department, year, reference_photo)
+             VALUES (?, ?, ?, ?, ?)`,
+            [userId, rollNo, department, year, referencePhotoPath]
           );
         }
 
@@ -163,7 +189,7 @@ router.post(
 
     try {
       let user;
-      
+
       if (student_id) {
         // Login with student_id (roll_no)
         const [studentRows] = await dbPromise.query(
@@ -206,8 +232,8 @@ router.post(
       const needsReferencePhoto = user.role === "student" && !studentProfile?.reference_photo;
 
       const token = issueToken(res, { id: user.id, role: user.role });
-      return res.json({ 
-        user: payload, 
+      return res.json({
+        user: payload,
         token,
         needsReferencePhoto: needsReferencePhoto || false
       });
@@ -289,7 +315,7 @@ router.post(
 
     try {
       const { photo } = req.body;
-      
+
       // Get student roll_no
       const [studentRows] = await dbPromise.query(
         "SELECT roll_no FROM student_details WHERE user_id = ?",
@@ -328,7 +354,7 @@ router.post(
         [relativePath, req.user.id]
       );
 
-      return res.json({ 
+      return res.json({
         message: "Reference photo saved successfully",
         photoPath: relativePath
       });

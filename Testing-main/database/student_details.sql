@@ -6,6 +6,7 @@ CREATE TABLE student_details (
   roll_no VARCHAR(50) NOT NULL UNIQUE,
   department VARCHAR(100) NOT NULL,
   year ENUM('1st year','2nd year','3rd year','4th year') NOT NULL,
+  reference_photo VARCHAR(500) NULL,   -- this is add my antigravity
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fr_student_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );

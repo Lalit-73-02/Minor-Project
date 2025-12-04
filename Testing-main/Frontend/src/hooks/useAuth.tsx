@@ -10,6 +10,7 @@ export interface User {
   department?: string;
   year?: string;
   studentId?: string;
+  referencePhoto?: string;
   createdAt: string;
 }
 
@@ -23,7 +24,8 @@ interface AuthContextType {
     role: 'admin' | 'student',
     rollNo?: string,
     department?: string,
-    year?: string
+    year?: string,
+    referencePhoto?: string
   ) => Promise<{ user: User } | { error: string }>;
   logout: () => void;
   loading: boolean;
@@ -55,10 +57,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (emailOrStudentId: string, password: string, isStudentId: boolean = false) => {
     try {
-      const body = isStudentId 
+      const body = isStudentId
         ? { student_id: emailOrStudentId, password }
         : { email: emailOrStudentId, password };
-        
+
       const data = await apiFetch<{ user: User; token?: string; needsReferencePhoto?: boolean }>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify(body),
@@ -91,12 +93,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     role: 'admin' | 'student',
     rollNo?: string,
     department?: string,
-    year?: string
+    year?: string,
+    referencePhoto?: string
   ) => {
     try {
       const data = await apiFetch<{ user: User; token?: string }>('/api/auth/register', {
         method: 'POST',
-        body: JSON.stringify({ email, password, name, role, rollNo, department, year }),
+        body: JSON.stringify({ email, password, name, role, rollNo, department, year, referencePhoto }),
       });
 
       setUser(data.user);
@@ -105,12 +108,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error: any) {
       return { error: error.message || 'Registration failed' };
     }
-  };  
+  };
 
   const logout = () => {
     setUser(null);
     setAuthToken(null);
-    apiFetch('/api/auth/logout', { method: 'POST', skipJson: true }).catch(() => {});
+    apiFetch('/api/auth/logout', { method: 'POST', skipJson: true }).catch(() => { });
   };
 
   return (

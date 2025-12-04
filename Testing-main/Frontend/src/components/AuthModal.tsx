@@ -28,6 +28,7 @@ interface FormData {
   department?: string;
   year?: string;
   adminPasskey?: string;
+  referencePhoto?: string;
 }
 
 export default function AuthModal({
@@ -45,6 +46,7 @@ export default function AuthModal({
     department: "",
     year: "",
     adminPasskey: "",
+    referencePhoto: "",
   });
 
   const { toast } = useToast();
@@ -70,6 +72,17 @@ export default function AuthModal({
 
   const handleChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setFormData((prev) => ({ ...prev, referencePhoto: reader.result as string }));
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -126,7 +139,8 @@ export default function AuthModal({
         formData.role as "admin" | "student",
         formData.rollNo,
         formData.department,
-        formData.year
+        formData.year,
+        formData.referencePhoto
       );
 
       if ("error" in result) {
@@ -183,6 +197,7 @@ export default function AuthModal({
       department: "",
       year: "",
       adminPasskey: "",
+      referencePhoto: "",
     });
   };
 
@@ -359,6 +374,16 @@ export default function AuthModal({
                       <SelectItem value="3rd year">3rd Year</SelectItem>
                     </SelectContent>
                   </Select>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-muted-foreground">Reference Photo (for Face Attendance)</label>
+                    <Input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFileChange}
+                      className="cursor-pointer"
+                    />
+                  </div>
                 </>
               )}
 

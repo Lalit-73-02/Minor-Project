@@ -2,7 +2,7 @@ CREATE TABLE attendance (
     id INT AUTO_INCREMENT PRIMARY KEY,
     student_id VARCHAR(50) NOT NULL,
     session_type ENUM('check-in', 'check-out') NOT NULL,
-    qr_id INT NOT NULL,
+    qr_id INT NULL,
     marked_at DATETIME NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
